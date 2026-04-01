@@ -1,0 +1,527 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+# ✅ FIX 1: set_page_config MUST be the very first Streamlit call
+st.set_page_config(page_title="ML Preprocessing Dashboard", layout="wide")
+
+# ==== Styling ====
+st.markdown("""
+<style>
+.stApp { background-color: #F8F9FA; }
+h1 { color: #2E86C1; }
+h3 { color: #E74C3C; }
+div.stButton > button {
+    background-color: #27AE60;
+    color: white;
+    border-radius: 6px;
+    width: 100%;
+}
+.step-box {
+    background: white;
+    border-left: 4px solid #2E86C1;
+    padding: 10px 15px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+.done { border-left-color: #27AE60; color: #27AE60; }
+.pending { border-left-color: #BDC3C7; color: #BDC3C7; }
+</style>
+""", unsafe_allow_html=True)
+
+# ==== Sidebar: Step Tracker ====
+with st.sidebar:
+    st.title("🔧 Pipeline Steps")
+
+    steps = [
+        ("Load Data",        "data_loaded"),
+        ("Split Data",       "dfnum"),
+        ("Handle Missing",   "missing_handled"),
+        ("Standardize",      "standardized"),
+        ("Encode",           "encoded"),
+    ]
+
+    for label, key in steps:
+        done = key in st.session_state and st.session_state[key] is not False
+        css = "done" if done else "pending"
+        icon = "✅" if done else "⬜"
+        st.markdown(f'<div class="step-box {css}">{icon} {label}</div>', unsafe_allow_html=True)
+
+# ==== Main Title ====
+st.title("📊 ML Preprocessing Dashboard")
+st.caption("Upload your dataset and follow the steps in order to preprocess it.")
+
+# ==== Step 1: Upload CSV ====
+st.header("Step 1: Load Data")
+uploaded = st.file_uploader("Upload CSV file", type=["csv"])
+
+if uploaded is not None:
+    # ✅ Only load fresh if this is a NEW file upload
+    # Check by comparing file name — if same file, don't overwrite cleaned df
+    if st.session_state.get("uploaded_filename") != uploaded.name:
+        df = pd.read_csv(uploaded)
+        st.session_state.df = df
+        st.session_state.data_loaded = True
+        st.session_state.uploaded_filename = uploaded.name
+        # Clear all downstream state for fresh start
+        st.session_state.pop("dfnum", None)
+        st.session_state.pop("dfcat", None)
+        st.session_state.pop("original_cat_cols", None)
+        st.session_state.pop("dfcat_checkpoint", None)
+        st.session_state.pop("missing_handled", None)
+        st.session_state.pop("standardized", None)
+        st.session_state.encoded_cols = {}
+        st.session_state.encoded = False
+
+if st.session_state.get("data_loaded"):
+    st.success(f"✅ Loaded {st.session_state.df.shape[0]} rows × {st.session_state.df.shape[1]} columns")
+
+def require(key, msg):
+    if key not in st.session_state:
+        st.warning(f"⚠️ {msg}")
+        return False
+    return True
+
+# ==== Step 2: Explore Data ====
+if st.session_state.get("data_loaded"):
+    st.header("Step 2: Explore Data")
+    df = st.session_state.df
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Rows", df.shape[0])
+    col2.metric("Columns", df.shape[1])
+    col3.metric("Missing Values", int(df.isnull().sum().sum()))
+
+    with st.expander("Preview first 5 rows"):
+        st.dataframe(df.head())
+
+    with st.expander("Missing values per column"):
+        missing = df.isnull().sum()
+        missing = missing[missing > 0]
+        if missing.empty:
+            st.success("No missing values found!")
+        else:
+            st.dataframe(missing.rename("Missing Count"))
+
+# ==== Step 3: Drop Unwanted Columns ====
+if st.session_state.get("data_loaded"):
+    st.header("Step 3: Drop Unwanted Columns")
+    st.caption("Remove high-cardinality or irrelevant columns (e.g. name, ID) that won't help your model.")
+
+    df_current = st.session_state.df
+
+    # ✅ If drop already done, show completed state instead of re-showing the form
+    if st.session_state.get("columns_dropped"):
+        st.success(f"✅ Dropped columns: {st.session_state.dropped_cols_list} — "
+                   f"{df_current.shape[1]} columns remaining.")
+        st.dataframe(df_current.head())
+        if st.button("🔄 Redo Column Drop"):
+            st.session_state.pop("columns_dropped", None)
+            st.session_state.pop("dropped_cols_list", None)
+    else:
+        auto_suggested = [
+            col for col in df_current.columns
+            if df_current[col].nunique() == len(df_current)
+        ]
+
+        if auto_suggested:
+            st.warning(f"⚠️ These columns have a unique value per row (likely IDs/names): **{', '.join(auto_suggested)}**")
+
+        cols_to_drop = st.multiselect(
+            "Select columns to drop",
+            options=df_current.columns.tolist(),
+            default=auto_suggested
+        )
+
+        if st.button("Drop Selected Columns"):
+            if cols_to_drop:
+                st.session_state.df = df_current.drop(columns=cols_to_drop)
+                st.session_state.columns_dropped = True
+                st.session_state.dropped_cols_list = cols_to_drop
+                # Clear all downstream state
+                st.session_state.pop("dfnum", None)
+                st.session_state.pop("dfcat", None)
+                st.session_state.pop("original_cat_cols", None)
+                st.session_state.pop("dfcat_checkpoint", None)
+                st.session_state.pop("missing_handled", None)
+                st.session_state.pop("standardized", None)
+                st.session_state.encoded_cols = {}
+                st.session_state.encoded = False
+                st.rerun()
+            else:
+                # No columns selected — mark step as done with no drops
+                st.session_state.columns_dropped = True
+                st.session_state.dropped_cols_list = []
+                st.rerun()
+
+# ==== Step 4: Split Data ====
+if st.session_state.get("data_loaded"):
+    st.header("Step 4: Split Numeric & Categorical")
+
+    # ✅ Warn user if they haven't dropped columns yet but auto_suggested exists
+    _df_check = st.session_state.df
+    _pending_drops = [c for c in _df_check.columns if _df_check[c].nunique() == len(_df_check)]
+    if _pending_drops:
+        st.warning(f"⚠️ Columns **{', '.join(_pending_drops)}** look like ID/name columns. "
+                   f"Please drop them in Step 3 before splitting.")
+
+    if st.button("Split Data"):
+        df = st.session_state.df
+        dfnum = df.select_dtypes(include=np.number).copy()
+        dfcat = df.select_dtypes(exclude=np.number).copy()
+        st.session_state.dfnum = dfnum
+        st.session_state.dfcat = dfcat
+        st.session_state.encoded_cols = {}
+        st.session_state.encoded = False
+        st.session_state.pop("dfcat_checkpoint", None)
+        st.session_state.original_cat_cols = dfcat.columns.tolist()
+        st.success(f"Numeric: {dfnum.shape[1]} cols | Categorical: {dfcat.shape[1]} cols")
+        st.info(f"Numeric columns: {dfnum.columns.tolist()}")
+        st.info(f"Categorical columns: {dfcat.columns.tolist()}")
+
+    if "dfnum" in st.session_state:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Numeric Columns")
+            st.write(list(st.session_state.dfnum.columns))
+        with c2:
+            st.subheader("Categorical Columns")
+            st.write(list(st.session_state.dfcat.columns))
+
+# ==== Step 5: Handle Missing Values ====
+if "dfnum" in st.session_state and "dfcat" in st.session_state:
+    st.header("Step 5: Handle Missing Values")
+
+    if st.button("Impute Missing Values"):
+        from sklearn.impute import SimpleImputer
+
+        dfnum = st.session_state.dfnum.copy()
+        dfcat = st.session_state.dfcat.copy()
+
+        si_num = SimpleImputer(strategy="mean")
+        dfnum.iloc[:, :] = si_num.fit_transform(dfnum)
+
+        si_cat = SimpleImputer(strategy="most_frequent")
+        dfcat.iloc[:, :] = si_cat.fit_transform(dfcat)
+
+        st.session_state.dfnum = dfnum
+        st.session_state.dfcat = dfcat
+        st.session_state.dfcat_checkpoint = dfcat.copy()
+        st.session_state.dfnum_checkpoint = dfnum.copy()
+        st.session_state.missing_handled = True
+        st.success("✅ Missing values imputed! (Numeric → mean, Categorical → most frequent)")
+
+    # ✅ After imputation — always show preview and confirm no missing values remain
+    if st.session_state.get("missing_handled"):
+        dfnum_post = st.session_state.dfnum
+        dfcat_post = st.session_state.dfcat
+        df_combined = pd.concat([dfnum_post.reset_index(drop=True),
+                                  dfcat_post.reset_index(drop=True)], axis=1)
+
+        total_missing = df_combined.isnull().sum().sum()
+        if total_missing == 0:
+            st.success("✅ No missing values remaining in the dataset!")
+        else:
+            st.warning(f"⚠️ {int(total_missing)} missing values still remain — check below.")
+            st.dataframe(df_combined.isnull().sum()[df_combined.isnull().sum() > 0]
+                         .rename("Remaining Missing"))
+
+        with st.expander("👀 Preview data after imputation"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.caption("Numeric columns")
+                st.dataframe(dfnum_post.head())
+            with col2:
+                st.caption("Categorical columns")
+                st.dataframe(dfcat_post.head())
+
+# ==== Step 6: Standardization ====
+if st.session_state.get("missing_handled"):
+    st.header("Step 6: Standardize Numeric Data")
+
+    if st.button("Apply StandardScaler"):
+        from sklearn.preprocessing import StandardScaler
+
+        dfnum = st.session_state.dfnum.copy()
+        ss = StandardScaler()
+        dfnum.iloc[:, :] = ss.fit_transform(dfnum)
+        st.session_state.dfnum = dfnum
+        st.session_state.standardized = True
+        st.success("Standardization complete!")
+
+        with st.expander("Preview standardized numeric data"):
+            st.dataframe(dfnum.head())
+
+# ==== Auto-detect encoding suggestion ====
+def suggest_encoding(col, series):
+    nuniq = series.nunique()
+    col_lower = col.lower()
+
+    ordinal_keywords = ["grade", "level", "rank", "rating", "score",
+                        "stage", "tier", "priority", "severity", "class",
+                        "degree", "education", "satisfaction", "frequency"]
+
+    nominal_keywords = ["origin", "country", "city", "region", "state",
+                        "color", "colour", "brand", "type", "category",
+                        "department", "gender", "sex", "language", "nationality"]
+
+    is_ordinal_name = any(kw in col_lower for kw in ordinal_keywords)
+    is_nominal_name = any(kw in col_lower for kw in nominal_keywords)
+
+    val_set = set(str(v).strip().lower() for v in series.dropna().unique())
+    is_binary_pattern = (val_set <= {"yes", "no"} or val_set <= {"true", "false"} or
+                         val_set <= {"y", "n"} or val_set <= {"male", "female"} or
+                         val_set <= {"m", "f"})
+
+    if nuniq == 2 or is_binary_pattern:
+        return "Label Encoding", "🟢 Binary column — Label Encoding recommended (e.g. Yes→1, No→0)"
+    elif is_ordinal_name and nuniq <= 10:
+        return "Ordinal Encoding", f"🟡 '{col}' suggests a ranked order — Ordinal Encoding recommended"
+    elif is_nominal_name and nuniq == 3:
+        return "One-Hot Encoding", (
+            f"🟡 '{col}' is nominal with 3 categories — One-Hot will work but creates 3 columns (only 2 needed). "
+            f"Consider using drop_first=True to avoid the dummy variable trap."
+        )
+    elif is_nominal_name and nuniq <= 6:
+        return "One-Hot Encoding", (
+            f"🟢 Nominal column with {nuniq} categories — One-Hot Encoding recommended. "
+            f"Will add {nuniq} new columns. Use drop_first=True if using linear models."
+        )
+    elif is_nominal_name and nuniq <= 15:
+        return "One-Hot Encoding", (
+            f"🟠 Nominal column '{col}' has {nuniq} categories — One-Hot will add {nuniq} new columns. "
+            f"Fine for small datasets."
+        )
+    elif is_nominal_name and nuniq > 15:
+        return "Drop", (
+            f"🔴 '{col}' is nominal with high cardinality ({nuniq} values) — consider dropping."
+        )
+    elif nuniq <= 6:
+        return "One-Hot Encoding", f"🟢 Low cardinality ({nuniq} values) — One-Hot Encoding recommended"
+    elif nuniq <= 15:
+        return "One-Hot Encoding", f"🟠 Moderate cardinality ({nuniq} values) — One-Hot possible but will add many columns"
+    else:
+        return "Drop", f"🔴 High cardinality ({nuniq} unique values) — consider dropping this column"
+
+# ==== Step 7: Encoding ====
+if st.session_state.get("missing_handled") and "dfcat" in st.session_state:
+    st.header("Step 7: Encode Categorical Variables")
+
+    dfcat = st.session_state.dfcat
+
+    if "encoded_cols" not in st.session_state:
+        st.session_state.encoded_cols = {}
+
+    # ✅ original_cat_cols is always set at Split time
+    # If somehow missing (e.g. old session), set it now as fallback
+    if "original_cat_cols" not in st.session_state:
+        st.session_state.original_cat_cols = dfcat.columns.tolist()
+        st.warning("⚠️ Please re-run Split Data to ensure accurate encoding progress tracking.")
+    original_cat_cols = st.session_state.original_cat_cols
+
+    # current cols still in dfcat (some may have been dropped during encoding)
+    current_cat_cols = dfcat.columns.tolist()
+
+    # Remove only truly stale keys (not in original list at all)
+    stale_keys = [k for k in st.session_state.encoded_cols if k not in original_cat_cols]
+    for k in stale_keys:
+        del st.session_state.encoded_cols[k]
+
+    st.subheader("📋 Categorical Columns Overview")
+    st.caption("Auto-suggestions are based on unique value count and column name keywords.")
+
+    summary_data = []
+    for col in original_cat_cols:
+        enc_status = st.session_state.encoded_cols.get(col, "❌ Not encoded")
+        already_handled = col in st.session_state.encoded_cols
+
+        if already_handled:
+            # ✅ Column already encoded/dropped — freeze suggestion, don't re-evaluate
+            uniq = "-"
+            vals = "-"
+            suggestion_msg = enc_status  # show what was applied e.g. "✅ One-Hot"
+        elif col in current_cat_cols:
+            # Column still pending — show live suggestion
+            uniq = dfcat[col].nunique()
+            vals = ", ".join(str(v) for v in dfcat[col].unique()[:5])
+            if uniq > 5:
+                vals += " ..."
+            _, suggestion_msg = suggest_encoding(col, dfcat[col])
+        else:
+            uniq = "-"
+            vals = "-"
+            suggestion_msg = "❓ Unknown state"
+
+        summary_data.append({
+            "Column": col,
+            "Unique Values": uniq,
+            "Sample Values": vals,
+            "Auto-Suggestion": suggestion_msg,
+            "Status": enc_status
+        })
+    st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+
+    st.divider()
+
+    st.subheader("🔧 Encode Column by Column")
+    st.caption("The encoding type is pre-selected based on auto-detection. You can override it before applying.")
+
+    # remaining = original cols not yet handled AND still physically in dfcat
+    remaining_cols = [c for c in original_cat_cols
+                      if c not in st.session_state.encoded_cols
+                      and c in current_cat_cols]
+
+    if not remaining_cols:
+        st.success("✅ All categorical columns have been encoded!")
+    else:
+        col_to_encode = st.selectbox("Select column to encode", remaining_cols)
+        col_series = dfcat[col_to_encode]
+        col_unique_vals = sorted(col_series.unique().tolist(), key=str)
+        col_nunique = len(col_unique_vals)
+
+        suggested_type, suggestion_msg = suggest_encoding(col_to_encode, col_series)
+        st.info(f"**{col_to_encode}** — {col_nunique} unique values: {col_unique_vals} | {suggestion_msg}")
+
+        enc_options = ["One-Hot Encoding", "Ordinal Encoding", "Label Encoding", "Drop Column"]
+        default_idx = enc_options.index(suggested_type) if suggested_type in enc_options else 0
+
+        enc_type = st.radio(
+            "Encoding type (auto-suggested, you can change this)",
+            enc_options,
+            index=default_idx,
+            horizontal=True,
+            help=("One-Hot: new binary column per category. "
+                  "Ordinal: ranked numbers (you set the order). "
+                  "Label: simple 0/1/2... mapping. "
+                  "Drop: remove column entirely.")
+        )
+
+        if enc_type == "One-Hot Encoding":
+            drop_first = st.toggle(
+                "Use drop_first (recommended for linear models)",
+                value=True,
+                help=(
+                    "Drops one dummy column to avoid multicollinearity (dummy variable trap). "
+                    "Use for Linear/Logistic Regression. Not needed for tree-based models."
+                )
+            )
+            expected_cols = col_nunique - 1 if drop_first else col_nunique
+            st.caption(
+                f"Will create **{expected_cols} new binary columns** from '{col_to_encode}' "
+                f"({'drop_first=True' if drop_first else 'all categories kept'})."
+            )
+            if st.button("✅ Confirm & Apply One-Hot Encoding"):
+                dfcat = st.session_state.dfcat.copy()
+                dfcat = pd.get_dummies(dfcat, columns=[col_to_encode], dtype=int, drop_first=drop_first)
+                st.session_state.dfcat = dfcat
+                st.session_state.encoded_cols[col_to_encode] = f"✅ One-Hot ({'drop_first' if drop_first else 'full'})"
+                st.session_state.encoded = True
+                st.success(f"One-Hot Encoding applied to '{col_to_encode}' ({expected_cols} new columns added)!")
+                st.dataframe(dfcat.filter(like=col_to_encode).head(), use_container_width=True)
+
+        elif enc_type == "Ordinal Encoding":
+            default_order = ", ".join(str(v) for v in col_unique_vals)
+            st.caption("Values are pre-filled alphabetically. **Reorder them** from lowest → highest rank.")
+            order_input = st.text_input(
+                "Category order (comma-separated, lowest → highest)",
+                value=default_order,
+                help="Example for grades: Fail, Pass, Merit, Distinction"
+            )
+            if order_input.strip():
+                order_list = [x.strip() for x in order_input.split(",")]
+                mapping_preview = {v: i for i, v in enumerate(order_list)}
+                st.write("**Mapping preview:**", mapping_preview)
+
+            if st.button("✅ Confirm & Apply Ordinal Encoding"):
+                if order_input.strip():
+                    order_list = [x.strip() for x in order_input.split(",")]
+                    try:
+                        from sklearn.preprocessing import OrdinalEncoder
+                        dfcat = st.session_state.dfcat.copy()
+                        oe = OrdinalEncoder(categories=[order_list])
+                        dfcat[col_to_encode] = oe.fit_transform(dfcat[[col_to_encode]])
+                        st.session_state.dfcat = dfcat
+                        st.session_state.encoded_cols[col_to_encode] = "✅ Ordinal"
+                        st.session_state.encoded = True
+                        st.success(f"Ordinal Encoding applied to '{col_to_encode}'!")
+                        st.dataframe(dfcat[[col_to_encode]].head(), use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error: {e} — make sure your order matches the actual categories exactly.")
+                else:
+                    st.warning("Please enter the category order.")
+
+        elif enc_type == "Label Encoding":
+            st.caption("Each category gets a number. Auto-assigned 0, 1, 2... — you can edit below.")
+            manual_map = {}
+            cols_ui = st.columns(min(col_nunique, 4))
+            for i, val in enumerate(col_unique_vals):
+                with cols_ui[i % len(cols_ui)]:
+                    manual_map[val] = st.number_input(
+                        f"'{val}' →", value=i, step=1, key=f"lbl_{col_to_encode}_{val}"
+                    )
+            st.write("**Mapping preview:**", manual_map)
+
+            if st.button("✅ Confirm & Apply Label Encoding"):
+                dfcat = st.session_state.dfcat.copy()
+                dfcat[col_to_encode] = dfcat[col_to_encode].map(manual_map)
+                if dfcat[col_to_encode].isnull().any():
+                    st.error("Some values couldn't be mapped — check your inputs.")
+                else:
+                    st.session_state.dfcat = dfcat
+                    st.session_state.encoded_cols[col_to_encode] = "✅ Label"
+                    st.session_state.encoded = True
+                    st.success(f"Label Encoding applied to '{col_to_encode}'!")
+                    st.dataframe(dfcat[[col_to_encode]].head(), use_container_width=True)
+
+        elif enc_type == "Drop Column":
+            st.warning(f"This will permanently remove **{col_to_encode}** from the dataset.")
+            if st.button("✅ Confirm & Drop Column"):
+                dfcat = st.session_state.dfcat.copy()
+                dfcat = dfcat.drop(columns=[col_to_encode])
+                st.session_state.dfcat = dfcat
+                st.session_state.encoded_cols[col_to_encode] = "🗑️ Dropped"
+                st.success(f"Column '{col_to_encode}' dropped.")
+
+    if original_cat_cols:
+        done_count = len(st.session_state.encoded_cols)
+        total = len(original_cat_cols)
+        st.divider()
+        st.caption(f"Progress: {done_count}/{total} columns handled")
+        st.progress(min(done_count / total, 1.0))
+
+    if st.session_state.encoded_cols:
+        if st.button("🔄 Reset All Encodings"):
+            if "dfcat_checkpoint" in st.session_state:
+                st.session_state.dfcat = st.session_state.dfcat_checkpoint.copy()
+            else:
+                st.session_state.dfcat = st.session_state.df.select_dtypes(exclude=np.number).copy()
+            st.session_state.encoded_cols = {}
+            st.session_state.encoded = False
+            st.success("✅ Encoding reset to post-imputation state — imputation and dropped columns are preserved.")
+
+# ==== Step 8: Export Final Dataset ====
+if st.session_state.get("encoded") or st.session_state.get("standardized"):
+    st.header("Step 8: Export Processed Data")
+
+    dfnum = st.session_state.get("dfnum", pd.DataFrame())
+    dfcat = st.session_state.get("dfcat", pd.DataFrame())
+
+    # ✅ Only filter dfnum against valid_cols (numeric cols never change names after encoding)
+    # dfcat is NOT filtered here — One-Hot creates NEW column names not in original df
+    # The drop in Step 3 already cleared dfnum/dfcat via session_state reset
+    valid_num_cols = st.session_state.df.columns.tolist()
+    dfnum = dfnum[[c for c in dfnum.columns if c in valid_num_cols]]
+
+    df_final = pd.concat([dfnum.reset_index(drop=True), dfcat.reset_index(drop=True)], axis=1)
+
+    # Show shape and confirm no dropped cols
+    st.success(f"✅ Final dataset: {df_final.shape[0]} rows × {df_final.shape[1]} columns")
+    st.dataframe(df_final.head())
+    csv = df_final.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇️ Download Processed CSV",
+        data=csv,
+        file_name="processed_data.csv",
+        mime="text/csv"
+    )
