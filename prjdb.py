@@ -2,29 +2,167 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="ML Preprocessing Dashboard", layout="wide")
+st.set_page_config(page_title="Data Preprocessing Dashboard", layout="wide")
 
 st.markdown("""
 <style>
-.stApp { background-color: #F8F9FA; }
-h1 { color: #2E86C1; }
-h3 { color: #E74C3C; }
-div.stButton > button {
-    background-color: #27AE60;
-    color: white;
-    border-radius: 6px;
-    width: 100%;
+
+/* ===== IMPORT FONT (clean & modern) ===== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+/* ===== APPLY FONT EVERYWHERE ===== */
+html, body, [class*="css"] {
+    font-family: 'Inter', 'Segoe UI', sans-serif !important;
 }
-.step-box {
-    background: white;
-    border-left: 4px solid #2E86C1;
-    padding: 10px 15px;
-    border-radius: 4px;
-    margin-bottom: 8px;
+
+/* ===== Main Background (LIGHT CREAM) ===== */
+.stApp {
+    background-color: #FFF8F0;  /* soft cream */
+}
+
+/* ===== Sidebar (soft cream + subtle contrast) ===== */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(to bottom, #FFF1E6, #FDEBD0);
+    padding: 12px;
+}
+
+/* ===== Titles ===== */
+h1 {
+    color: #5D4037;   /* warm brown */
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+h3 {
+    color: #6D4C41;
+    font-weight: 500;
+}
+
+/* ===== Caption ===== */
+.stCaption {
+    color: #8D6E63 !important;
     font-size: 14px;
 }
-.done { border-left-color: #27AE60; color: #27AE60; }
-.pending { border-left-color: #BDC3C7; color: #BDC3C7; }
+
+/* ===== Buttons (soft elegant green) ===== */
+div.stButton > button {
+    background-color: #A5D6A7;
+    color: #1B5E20;
+    border-radius: 10px;
+    padding: 8px;
+    border: none;
+    font-weight: 500;
+    transition: 0.3s;
+}
+
+div.stButton > button:hover {
+    background-color: #81C784;
+    color: white;
+}
+
+/* ===== Sidebar Step Boxes ===== */
+.step-box {
+    background: #FFFFFF;
+    border-left: 5px solid #D7CCC8;
+    padding: 10px;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+
+/* Done */
+.done {
+    border-left-color: #81C784;
+    color: #2E7D32;
+    font-weight: 600;
+}
+
+/* Pending */
+.pending {
+    border-left-color: #D7CCC8;
+    color: #8D6E63;
+}
+
+/* ===== DataFrame ===== */
+[data-testid="stDataFrame"] {
+    border-radius: 10px;
+    border: 1px solid #E0D7CF;
+    background-color: #FFFFFF;
+}
+
+/* ===== Expander ===== */
+.streamlit-expanderHeader {
+    font-size: 14px;
+    color: #6D4C41;
+    font-weight: 500;
+}
+
+/* ===== Metrics ===== */
+[data-testid="stMetric"] {
+    background: #FFFFFF;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #E0D7CF;
+}
+
+/* ===== Alerts ===== */
+.stAlert-success {
+    background-color: #E8F5E9;
+    color: #2E7D32;
+}
+
+.stAlert-info {
+    background-color: #FFF3E0;
+    color: #E65100;
+}
+
+.stAlert-warning {
+    background-color: #FFF8E1;
+    color: #FF6F00;
+}
+
+/* ===== Progress Bar ===== */
+.stProgress > div > div {
+    background-color: #81C784;
+}
+
+/* ===== Inputs ===== */
+input, textarea {
+    border-radius: 8px !important;
+}
+
+/* ===== Selectbox ===== */
+div[data-baseweb="select"] > div {
+    border-radius: 8px;
+}
+
+/* ===== Remove top white space ===== */
+.block-container {
+    padding-top: 0.5rem !important;
+}
+
+header {
+    visibility: hidden;
+}
+
+.main > div {
+    padding-top: 0rem;
+}
+
+/* ===== Subtle hover ===== */
+button:hover {
+    transform: scale(1.02);
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-thumb {
+    background: #D7CCC8;
+    border-radius: 10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -153,7 +291,7 @@ def render_smart_chart(df, col1, col2):
     plt.close(fig)
 
 # ==== Main Title ====
-st.title("ML Preprocessing Dashboard")
+st.title("Data Preprocessing Dashboard")
 st.caption("Upload your dataset and follow the steps in order to preprocess it.")
 
 # ==== Step 1: Upload CSV ====
