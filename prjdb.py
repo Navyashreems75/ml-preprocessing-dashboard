@@ -215,7 +215,6 @@ def render_smart_chart(df, col1, col2):
     fig, ax = plt.subplots(figsize=(9, 4))
 
     if is_num1 and is_num2:
-        # Scatter plot with trend line
         clean = df[[col1, col2]].dropna()
         ax.scatter(clean[col1], clean[col2], alpha=0.5, s=30, color="#2E86C1", edgecolors="white", linewidth=0.4)
         m, b = np.polyfit(clean[col1], clean[col2], 1)
@@ -228,7 +227,6 @@ def render_smart_chart(df, col1, col2):
         chart_note = "📈 Numeric vs Numeric → Scatter plot with trend line"
 
     elif not is_num1 and is_num2:
-        # Box plot: categorical col1 on x, numeric col2 on y
         categories = sorted(df[col1].dropna().unique().tolist(), key=str)
         data_by_cat = [df[df[col1] == cat][col2].dropna().values for cat in categories]
         cmap = plt.cm.get_cmap("Set2", len(categories))
@@ -248,7 +246,6 @@ def render_smart_chart(df, col1, col2):
         chart_note = "📦 Categorical vs Numeric → Box plot"
 
     elif is_num1 and not is_num2:
-        # Box plot: categorical col2 on x, numeric col1 on y
         categories = sorted(df[col2].dropna().unique().tolist(), key=str)
         data_by_cat = [df[df[col2] == cat][col1].dropna().values for cat in categories]
         cmap = plt.cm.get_cmap("Set2", len(categories))
@@ -268,7 +265,6 @@ def render_smart_chart(df, col1, col2):
         chart_note = "📦 Numeric vs Categorical → Box plot"
 
     else:
-        # Both categorical → heatmap count
         ct = pd.crosstab(df[col1], df[col2])
         cax = ax.imshow(ct.values, aspect="auto", cmap="Blues")
         fig.colorbar(cax, ax=ax, label="Count")
@@ -333,23 +329,117 @@ if st.session_state.get("data_loaded"):
         else:
             st.dataframe(missing.rename("Missing Count"))
 
-# ==== Step 3: Visualize Data (Smart 2-Column Chart) ====
+# ==== Step 3: Visualize Data (Fully Automated) ====
 if st.session_state.get("data_loaded"):
     st.header("Step 3: Visualize Data")
     df = st.session_state.df
 
-    st.caption("Pick any 2 columns — the best chart is chosen automatically based on their data types.")
+    st.caption("Automatically identifying the two most impactful column relationships in your dataset.")
 
-    all_cols = df.columns.tolist()
-    v_col1, v_col2 = st.columns(2)
-    with v_col1:
-        axis_col1 = st.selectbox("Column 1", all_cols, index=0, key="viz_col1")
-    with v_col2:
-        remaining = [c for c in all_cols if c != axis_col1]
-        axis_col2 = st.selectbox("Column 2", remaining, index=0, key="viz_col2")
+    if st.button("Auto-Analyze & Generate Charts"):
+        from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+        from sklearn.preprocessing import LabelEncoder
 
-    if st.button("Generate Chart"):
-        render_smart_chart(df, axis_col1, axis_col2)
+        num_cols = df.select_dtypes(include=np.number).columns.tolist()
+        cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
+        all_cols = df.columns.tolist()
+
+        best_pairs = []
+
+        # --- Strategy 1: Highest absolute Pearson correlation (numeric pairs) ---
+        if len(num_cols) >= 2:
+            corr = df[num_cols].corr().abs()
+            np.fill_diagonal(corr.values, 0)
+            max_idx = np.unravel_index(np.argmax(corr.values), corr.shape)
+            score = corr.values[max_idx]
+            pair = (num_cols[max_idx[0]], num_cols[max_idx[1]])
+            best_pairs.append(("corr", pair, score))
+
+        # --- Strategy 2: Mutual Information — best numeric predictor for highest-variance target ---
+        if len(num_cols) >= 1 and len(all_cols) >= 2:
+            target_col = df[num_cols].var().idxmax() if num_cols else None
+            if target_col:
+                other_cols = [c for c in all_cols if c != target_col]
+                df_temp = df[other_cols + [target_col]].dropna()
+                X_encoded = df_temp[other_cols].copy()
+                for c in X_encoded.select_dtypes(exclude=np.number).columns:
+                    X_encoded[c] = LabelEncoder().fit_transform(X_encoded[c].astype(str))
+                y = df_temp[target_col]
+                try:
+                    mi_scores = mutual_info_regression(X_encoded, y, random_state=0)
+                    best_feat_idx = int(np.argmax(mi_scores))
+                    best_feat = other_cols[best_feat_idx]
+                    mi_score = float(mi_scores[best_feat_idx])
+                    pair = (best_feat, target_col)
+                    # Only add if not a duplicate of pair 1
+                    if not best_pairs or set(pair) != set(best_pairs[0][1]):
+                        best_pairs.append(("mi", pair, mi_score))
+                except Exception:
+                    pass
+
+        # --- Strategy 3: Categorical target — mutual info classification ---
+        if len(best_pairs) < 2 and cat_cols and num_cols:
+            target_cat = min(cat_cols, key=lambda c: df[c].nunique())
+            df_temp = df[num_cols + [target_cat]].dropna()
+            y_cat = LabelEncoder().fit_transform(df_temp[target_cat].astype(str))
+            try:
+                mi_scores = mutual_info_classif(df_temp[num_cols], y_cat, random_state=0)
+                best_feat = num_cols[int(np.argmax(mi_scores))]
+                pair = (best_feat, target_cat)
+                if not any(set(pair) == set(p[1]) for p in best_pairs):
+                    best_pairs.append(("mi_cat", pair, float(np.max(mi_scores))))
+            except Exception:
+                pass
+
+        # --- Fallback: pick first two distinct column pairs ---
+        if len(best_pairs) < 2:
+            for i in range(len(all_cols)):
+                for j in range(i + 1, len(all_cols)):
+                    pair = (all_cols[i], all_cols[j])
+                    if not any(set(pair) == set(p[1]) for p in best_pairs):
+                        best_pairs.append(("fallback", pair, 0.0))
+                    if len(best_pairs) >= 2:
+                        break
+                if len(best_pairs) >= 2:
+                    break
+
+        # --- Filter out any columns not present in df before storing ---
+        valid_pairs = [
+            (strategy, (c1, c2), score)
+            for strategy, (c1, c2), score in best_pairs[:2]
+            if c1 in df.columns and c2 in df.columns
+        ]
+        st.session_state.auto_viz_pairs = valid_pairs
+        st.rerun()
+
+    # --- Render stored charts (persists across reruns) ---
+    if st.session_state.get("auto_viz_pairs"):
+        df = st.session_state.df
+
+        # Re-validate pairs against current df columns (guards against columns dropped later)
+        best_pairs = [
+            (strategy, (c1, c2), score)
+            for strategy, (c1, c2), score in st.session_state.auto_viz_pairs
+            if c1 in df.columns and c2 in df.columns
+        ]
+
+        if not best_pairs:
+            st.warning("Previously selected columns were removed. Click 'Auto-Analyze & Generate Charts' again.")
+            st.session_state.pop("auto_viz_pairs", None)
+        else:
+            label_map = {
+                "corr":    lambda c1, c2, s: f"📊 **Highest correlation ({s:.2f})** — `{c1}` vs `{c2}`",
+                "mi":      lambda c1, c2, s: f"🔍 **Best mutual info predictor (score: {s:.3f})** — `{c1}` → `{c2}`",
+                "mi_cat":  lambda c1, c2, s: f"🎯 **Top feature for class target (score: {s:.3f})** — `{c1}` → `{c2}`",
+                "fallback":lambda c1, c2, s: f"📈 **`{c1}` vs `{c2}`**",
+            }
+
+            chart_cols = st.columns(2)
+            for idx, (strategy, (c1, c2), score) in enumerate(best_pairs):
+                with chart_cols[idx]:
+                    caption_fn = label_map.get(strategy, label_map["fallback"])
+                    st.markdown(caption_fn(c1, c2, score))
+                    render_smart_chart(df, c1, c2)
 
 # ==== Step 4: Drop Unwanted Columns ====
 if st.session_state.get("data_loaded"):
