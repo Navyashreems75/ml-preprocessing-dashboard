@@ -1,6 +1,6 @@
-# ML Preprocessing Dashboard
+# Data Preprocessing Dashboard
 
-An interactive Streamlit web application for performing end-to-end data preprocessing for Machine Learning.
+An interactive Streamlit web application for performing end-to-end data preprocessing.
 
 ## Features
 - Upload CSV dataset
