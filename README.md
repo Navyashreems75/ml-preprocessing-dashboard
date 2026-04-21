@@ -69,11 +69,15 @@ marketing-campaign-ml/
     ├── 03_model_evaluation.png
     └── 04_prediction.png
 ```
+DASHBOARD
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/a30343fc-5bb0-46ac-aa8a-0435e3e92527" />
 
+DATA PRECROCESSING
 <img width="1920" height="1080" alt="Screenshot 2026-04-21 084842" src="https://github.com/user-attachments/assets/dee48901-fd77-432e-9141-180109337841" />
 
-image=<img width="1920" height="1080" alt="Screenshot 2026-04-15 233223" src="https://github.com/user-attachments/assets/a5811d60-bd70-4fc2-b1f0-9b3e907b8cb9" />
+ML MODEL TRAINING
+<img width="1920" height="1080" alt="Screenshot 2026-04-15 233223" src="https://github.com/user-attachments/assets/a5811d60-bd70-4fc2-b1f0-9b3e907b8cb9" />
 
+PREDICTION
 <img width="960" height="540" alt="image" src="https://github.com/user-attachments/assets/b677639a-025e-47c0-bc3e-6d5ac6933986" />
 
