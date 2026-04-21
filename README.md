@@ -2,14 +2,6 @@
 
 An interactive Streamlit app that walks through a complete machine learning pipeline for predicting customer responses to a marketing campaign — from raw data cleaning to single-customer prediction.
 
-## Screenshots
-
-<!-- Add your output screenshots here -->
-![Dataset Overview](images/01_dataset_overview.png)
-![Preprocessing Steps](images/02_preprocessing.png)
-![Model Evaluation](images/03_model_evaluation.png)
-![Single Prediction](images/04_prediction.png)
-
 ## Features
 
 - **Step-by-step preprocessing** — each transformation is applied interactively via buttons, so you can follow along in real time
@@ -77,4 +69,11 @@ marketing-campaign-ml/
     ├── 03_model_evaluation.png
     └── 04_prediction.png
 ```
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/a30343fc-5bb0-46ac-aa8a-0435e3e92527" />
+
+<img width="1920" height="1080" alt="Screenshot 2026-04-21 084842" src="https://github.com/user-attachments/assets/dee48901-fd77-432e-9141-180109337841" />
+
 image=<img width="1920" height="1080" alt="Screenshot 2026-04-15 233223" src="https://github.com/user-attachments/assets/a5811d60-bd70-4fc2-b1f0-9b3e907b8cb9" />
+
+<img width="960" height="540" alt="image" src="https://github.com/user-attachments/assets/b677639a-025e-47c0-bc3e-6d5ac6933986" />
+
